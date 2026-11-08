@@ -7,7 +7,7 @@ import threading
 import unittest
 from unittest.mock import Mock, patch
 
-from requ import Client, ContentEncodingError, HTTPStatusError, RedirectError, Response, ResponseLimitError
+from requ import Client, ContentEncodingError, HTTPStatusError, RedirectError, Response, ResponseLimitError, TransportError
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -123,8 +123,9 @@ class RequHttpTests(unittest.TestCase):
         for path in ('/ok', '/oversize', '/unbounded'):
             with self.subTest(path=path), self.assertRaises(ResponseLimitError):
                 Client(max_bytes=4).get(self.base + path)
-        with self.assertRaises(IncompleteRead):
+        with self.assertRaises(TransportError) as raised:
             Client().get(self.base + '/short')
+        self.assertIsInstance(raised.exception.__cause__, IncompleteRead)
         for path in ('/conflicting', '/invalid-length'):
             with self.assertRaises(ValueError):
                 Client().get(self.base + path)
@@ -181,21 +182,15 @@ class RequHttpTests(unittest.TestCase):
 
         raw = Raw()
         raw.headers['Location'] = 'http://example.test/'
-        opener = Mock()
-        opener.open.return_value = raw
-        from urllib.request import HTTPSHandler, ProxyHandler
-
-        with (
-            patch('requ.build_opener', return_value=opener),
-            patch('requ.HTTPSHandler', wraps=HTTPSHandler) as https,
-            patch('requ.ProxyHandler', wraps=ProxyHandler) as proxy,
-        ):
-            with self.assertRaises(RedirectError):
-                Client().get('https://example.test/')
+        connection = Mock()
+        connection.getresponse.return_value = raw
+        with patch('requ.HTTPSConnection', return_value=connection) as https:
+            with Client() as client:
+                with self.assertRaises(RedirectError):
+                    client.get('https://example.test/')
             context = https.call_args.kwargs['context']
             self.assertTrue(context.check_hostname)
             self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
-            proxy.assert_called_once_with({})
         self.assertTrue(raw.closed)
 
     def test_proxy_environment_requires_opt_in(self):
