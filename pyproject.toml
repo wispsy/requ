@@ -1,7 +1,7 @@
 [project]
 name = "requ"
 version = "0.1.0"
-description = "Explicit, bounded HTTP(S) GET retrieval over urllib.request"
+description = "Bounded HTTP(S) requests with client-owned connection pooling"
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
