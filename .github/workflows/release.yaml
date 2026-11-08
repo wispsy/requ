@@ -1,0 +1,38 @@
+name: Release
+
+on:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: requ-pypi-release
+  cancel-in-progress: false
+
+jobs:
+  checks:
+    name: Release checks
+    uses: ./.github/workflows/checks.yaml
+    with:
+      release-tag: ${{ github.ref_name }}
+      upload-distributions: true
+
+  publish:
+    name: Publish to PyPI
+    needs: checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    environment:
+      name: pypi
+      url: https://pypi.org/project/requ/
+    permissions:
+      id-token: write
+    steps:
+      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5
+        with:
+          name: release-distributions
+          path: dist
+      - name: Publish verified distributions
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # release/v1

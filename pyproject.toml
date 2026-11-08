@@ -29,4 +29,4 @@ requires = ["uv_build>=0.13.6,<0.14.0"]
 build-backend = "uv_build"
 
 [tool.uv.build-backend]
-source-include = ["tests/**", "docs/**", "LICENSE", "README.md"]
+source-include = ["tests/**", "docs/**", "scripts/**", "examples/**", "LICENSE", "README.md", "CHANGELOG.md"]

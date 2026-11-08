@@ -15,10 +15,14 @@ from urllib.request import HTTPRedirectHandler, HTTPSHandler, ProxyHandler, Requ
 from ._pool import ClientClosedError, Pool, PoolTimeoutError
 
 __all__ = [
-    'Client', 'Response', 'ResponseLimitError', 'RequestLimitError',
+    'Client', 'AsyncClient', 'Response', 'JSONValue', 'encode_json', 'ResponseLimitError', 'RequestLimitError',
     'RedirectError', 'ContentEncodingError', 'HTTPStatusError',
     'TransportError', 'TransportTimeoutError', 'ClientClosedError', 'PoolTimeoutError',
 ]
+
+__version__ = '0.1.0'
+
+type JSONValue = None | bool | int | float | str | list[JSONValue] | dict[str, JSONValue]
 
 _TOKEN = re.compile(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+\Z")
 _RESERVED = {
@@ -102,6 +106,26 @@ def _headers(headers: Mapping[str, str] | None) -> dict[str, str]:
     return supplied
 
 
+def encode_json(value: JSONValue) -> bytes:
+    """Encode finite JSON with string object keys and no implicit coercions."""
+    # The encoder detects cycles before the structural traversal below.
+    result = _json.dumps(value, allow_nan=False, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+
+    def check(item):
+        if type(item) is dict:
+            if any(type(key) is not str for key in item):
+                raise TypeError('JSON object keys must be strings')
+            for child in item.values():
+                check(child)
+        elif type(item) is list:
+            for child in item:
+                check(child)
+        elif item is not None and type(item) not in (str, bool, int, float):
+            raise TypeError('value is not a JSON value')
+    check(value)
+    return result
+
+
 def _constant(value: str):
     raise ValueError('non-finite JSON number')
 
@@ -153,7 +177,7 @@ class Response:
     def text(self) -> str:
         return self.decode()
 
-    def json(self):
+    def json(self) -> JSONValue:
         """Decode UTF-8 JSON; reject duplicate members and non-finite numbers."""
         return _json.loads(self.body.decode('utf-8'), parse_constant=_constant,
                            parse_float=_finite_float, object_pairs_hook=_object)
@@ -249,7 +273,7 @@ class Client:
         if json is not _MISSING:
             if body is not None:
                 raise ValueError('body and json are mutually exclusive')
-            body = _json.dumps(json, allow_nan=False, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
+            body = encode_json(json)
             supplied.setdefault('content-type', 'application/json')
         if body is not None and not isinstance(body, bytes):
             raise TypeError('body must be bytes or None')
@@ -360,3 +384,46 @@ class Client:
         if not no_body and length is not None and size < length:
             raise IncompleteRead(result, length - size)
         return Response(url, raw.status, tuple(raw.headers.items()), result)
+
+
+class AsyncClient:
+    """Worker-thread facade over Client, sharing its limits and owned pool.
+
+    Cancellation stops awaiting; dispatched requests can still complete. Closing
+    prevents further leases and retires active connections on their return.
+    """
+
+    def __init__(self, **options) -> None:
+        self._client = Client(**options)
+
+    async def request(self, method: str, url: str, **kwargs) -> Response:
+        import asyncio
+        return await asyncio.to_thread(self._client.request, method, url, **kwargs)
+
+    async def get(self, url: str, **kwargs) -> Response:
+        return await self.request('GET', url, **kwargs)
+
+    async def head(self, url: str, **kwargs) -> Response:
+        return await self.request('HEAD', url, **kwargs)
+
+    async def post(self, url: str, **kwargs) -> Response:
+        return await self.request('POST', url, **kwargs)
+
+    async def put(self, url: str, **kwargs) -> Response:
+        return await self.request('PUT', url, **kwargs)
+
+    async def patch(self, url: str, **kwargs) -> Response:
+        return await self.request('PATCH', url, **kwargs)
+
+    async def delete(self, url: str, **kwargs) -> Response:
+        return await self.request('DELETE', url, **kwargs)
+
+    async def aclose(self) -> None:
+        self._client.close()
+
+    async def __aenter__(self):
+        self._client._pool.check_open()
+        return self
+
+    async def __aexit__(self, *exc) -> None:
+        await self.aclose()
