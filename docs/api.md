@@ -1,69 +1,97 @@
-# Requ API Reference
+# HTTP client contract
 
-`requ` provides explicit, bounded HTTP(S) GET retrieval built strictly on Python's standard library (`urllib.request` and `ssl`). It has zero third-party dependencies.
+`Client` and `AsyncClient` accept these keyword-only configuration fields (the
+synchronous dataclass also accepts positional configuration for compatibility):
 
-## Key Design Principles
+| Option | Default | Meaning |
+| --- | --- | --- |
+| timeout | 10 seconds | Each blocking socket operation; not DNS or total time |
+| max_bytes | 5,000,000 | Maximum buffered response bytes |
+| max_request_bytes | 5,000,000 | Maximum transmitted body bytes |
+| max_connections | 10 | Total concurrent leases/retained direct connections across origins |
+| pool_timeout | 10 seconds | Maximum wait for an available lease |
+| keepalive_expiry | 30 seconds | Idle direct connections expire on the next acquisition |
+| max_redirects | 5 | Maximum GET/HEAD redirects |
+| allow_cross_origin_redirects | False | Opt in, stripping all caller headers |
+| trust_env | False | Opt in to urllib environment/system proxy discovery |
 
-1. **Explicit Bounds**: Enforces limits on response body size (`max_bytes`), redirects (`max_redirects`), and blocking socket operations (`timeout`).
-2. **Immutable Responses**: `Response` objects own and buffer their payload, closing underlying sockets before returning to the caller.
-3. **No Hidden State**: No connection pooling, no cookies, no implicit decompression, no ambient global opener modification.
-4. **Strict URL Validation**: Requires absolute ASCII HTTP(S) URLs without credentials, control characters, or whitespace.
+Numeric time bounds must be finite and positive; count/byte bounds must be positive
+integers, except `max_redirects` permits zero. Booleans are not accepted as numbers.
+Clients can be shared between threads. Async clients use the same core via
+`asyncio.to_thread`, not native event-loop sockets. Cancellation stops waiting and
+does not roll back mutations or cancel the active worker. Applications needing a
+hard process-level deadline must arrange it outside this client.
 
----
+## Requests
 
-## Classes & Exceptions
+`request(method, url, *, headers=None, body=None, json=..., params=None)` accepts
+absolute ASCII HTTP(S) URLs without credentials, whitespace or control characters.
+Fragments are removed. Unicode paths/hosts must already be URL/IDNA encoded.
+`params` uses standard `urlencode(..., doseq=True)` and may be a mapping or ordered
+pairs, preserving repeated keys. CONNECT, TRACE and GET/HEAD bodies are unsupported.
+Conveniences: `get`, `head`, `post`, `put`, `patch`, `delete`.
 
-### `Client`
+Bodies are immutable bytes or strict finite JSON (`json=None` sends JSON null).
+`body` and `json` are exclusive. JSON uses UTF-8, string object keys, JSON primitive
+values, lists and dictionaries; tuple/custom-value coercion is rejected. Encoding
+occurs before the byte limit is checked, so the caller must also bound input memory.
+`encode_json` exposes the same encoder and `JSONValue` its recursive type.
 
-```python
-@dataclass(frozen=True, slots=True)
-class Client:
-    timeout: float = 10.0
-    max_bytes: int = 5_000_000
-    max_redirects: int = 5
-    allow_cross_origin_redirects: bool = False
-    trust_env: bool = False
-```
+Headers are copied, case-insensitively deduplicated and validated as token names
+and Latin-1 values without controls. The transport owns Host, Connection,
+Content-Length, Transfer-Encoding, Proxy-Authorization, Proxy-Connection,
+Accept-Encoding, Keep-Alive, TE, Trailer, Upgrade and Expect. JSON defaults to
+Content-Type application/json; callers may select a specific JSON media type.
+No cookie store, ambient API credentials or automatic retries are installed.
 
-- `timeout`: Maximum seconds allowed for blocking socket operations (does not bound DNS resolution or total wall-clock time).
-- `max_bytes`: Maximum allowed payload byte length. Responses exceeding this threshold raise `ResponseLimitError`.
-- `max_redirects`: Maximum number of sequential redirects followed before raising `RedirectError`.
-- `allow_cross_origin_redirects`: When `False` (default), redirects to a different origin raise `RedirectError`. When `True`, redirects across origins proceed, but all caller-supplied headers are stripped for safety.
-- `trust_env`: Whether to read proxy configuration from environment variables (defaults to `False`).
+## Redirects, proxies and pooling
 
-#### Methods
+Only GET/HEAD redirects are followed. Other methods return their 3xx response;
+`raise_for_status()` follows the usual 4xx/5xx convention, so inspect 3xx explicitly
+if your application requires 2xx. HTTPS downgrade, cycles, invalid targets and
+unselected cross-origin redirects fail. Cross-origin opt-in drops **all** caller
+headers permanently for the remaining redirect chain. Automatic decompression is
+absent and non-identity Content-Encoding fails for representation bodies.
 
-- `get(url: str, *, headers: Mapping[str, str] | None = None) -> Response`
-  Executes an HTTP GET request. `headers` must be Latin-1 encodable string pairs with no control characters. Reserved headers (`Host`, `Connection`, `Content-Length`, `Transfer-Encoding`, `Proxy-Authorization`, `Accept-Encoding`) cannot be overridden.
+TLS uses the platform default verified context with HTTP/1.1 ALPN. There is no
+certificate-verification bypass. By default proxies and global urllib openers are
+ignored. `trust_env=True` selects urllib's proxy discovery, CONNECT and proxy auth;
+these requests hold a bounded lease but always close their actual sockets and do
+not pool proxy connections. HTTP proxies can observe unencrypted HTTP traffic.
+URLs are not an SSRF policy; callers select permitted destinations themselves.
 
----
+Direct connections are pooled by scheme, host and port. Only completely consumed,
+validly framed keep-alive responses return connections to the pool. Errors evict
+connections. Idle connections may be evicted for another origin; stale connections
+can fail and are never automatically retried, including safe methods. `close()` is
+idempotent, closes idle sockets, wakes lease waiters and prevents new requests.
+Active leases finish and close on return. Closing does not wait for or cancel them.
+Use `with Client(...)` / `async with AsyncClient(...)`; async close is `aclose()`.
 
-### `Response`
+## Responses and errors
 
-```python
-@dataclass(frozen=True, slots=True)
-class Response:
-    url: str
-    status: int
-    headers: tuple[tuple[str, str], ...]
-    body: bytes
-```
+Frozen `Response(url, status, headers, body)` owns immutable bytes and ordered
+header pairs, retaining duplicate response headers. `header(name)` selects the
+first; `headers_all(name)` returns all. `text` / `decode(encoding=None,
+errors='strict')` uses a declared charset or UTF-8, without sniffing. `json()`
+requires UTF-8 finite JSON and rejects duplicate object members. JSON/status errors
+retain no connection lease. Response content type is data; JSON parsing is explicit.
 
-#### Properties & Methods
+Response framing accepts a valid Content-Length or exactly chunked transfer
+encoding, rejects conflicting/invalid lengths, TE+CL ambiguity and unsupported TE,
+and detects truncated bodies. Header line/count bounds come from `http.client`.
+HEAD/204/304 ignore representation length when checking body limits.
 
-- `status: int`: HTTP status code (e.g. 200, 404).
-- `body: bytes`: Immutable response body bytes.
-- `text: str`: Decodes `body` using the declared `Content-Type` charset, falling back to UTF-8.
-- `decode(encoding: str | None = None, *, errors: str = 'strict') -> str`: Decodes body bytes with optional encoding override.
-- `header(name: str) -> str | None`: Returns the first matching header value (case-insensitive), or `None`.
-- `headers_all(name: str) -> tuple[str, ...]`: Returns all matching header values in appearance order.
-- `raise_for_status() -> None`: Raises `HTTPStatusError` if `status` is in the 4xx or 5xx range.
+| Error | Meaning |
+| --- | --- |
+| TransportError (OSError) | Connection, TLS, socket or HTTP protocol failure; chained original error |
+| TransportTimeoutError (also TimeoutError) | Socket operation timed out |
+| PoolTimeoutError (TimeoutError) | Lease wait expired; no request was sent |
+| ClientClosedError (RuntimeError) | No new request/lease is accepted |
+| RequestLimitError / ResponseLimitError (ValueError) | Selected byte bound exceeded |
+| RedirectError / ContentEncodingError (ValueError) | Selected redirect/encoding policy failed |
+| HTTPStatusError (RuntimeError) | Explicit raise_for_status rejected 4xx/5xx; `.response` preserved |
+| TypeError / ValueError | Invalid input, framing or JSON; no implicit correction |
 
----
-
-### Exceptions
-
-- `ResponseLimitError(ValueError)`: Raised when the received bytes exceed `max_bytes`, or when `Content-Length` exceeds `max_bytes`.
-- `RedirectError(ValueError)`: Raised on redirect limit exhaustion, cycle detection, unauthorized cross-origin navigation, or HTTPS-to-HTTP downgrade.
-- `ContentEncodingError(ValueError)`: Raised when a server responds with non-identity `Content-Encoding`.
-- `HTTPStatusError(RuntimeError)`: Raised by `response.raise_for_status()` for 4xx/5xx responses; references `.response`.
+Transport failure or await cancellation can occur after a mutation reached the
+server. Applications must reconcile state before any explicit retry.
