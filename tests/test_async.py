@@ -16,6 +16,7 @@ class AsyncTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_async_methods_reuse_pool_and_close(self):
         async with AsyncClient(max_connections=1) as client:
+            self.assertFalse(client.allow_cross_origin_redirects)
             first = (await client.get(self.base)).json()['port']
             for method in ('post', 'put', 'patch', 'delete'):
                 response = await getattr(client, method)(self.base, json={'x': 1})

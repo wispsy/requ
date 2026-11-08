@@ -396,6 +396,11 @@ class AsyncClient:
     def __init__(self, **options) -> None:
         self._client = Client(**options)
 
+    @property
+    def allow_cross_origin_redirects(self) -> bool:
+        """Read-only redirect configuration for higher-level scoped clients."""
+        return self._client.allow_cross_origin_redirects
+
     async def request(self, method: str, url: str, **kwargs) -> Response:
         import asyncio
         return await asyncio.to_thread(self._client.request, method, url, **kwargs)
