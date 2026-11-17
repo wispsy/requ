@@ -95,3 +95,49 @@ HEAD/204/304 ignore representation length when checking body limits.
 
 Transport failure or await cancellation can occur after a mutation reached the
 server. Applications must reconcile state before any explicit retry.
+
+## Requests-style frontend (0.2.0 candidate)
+
+`requ.get/post/put/patch/delete/head/options` and `requ.request(method, url, ...)`
+provide the common Requests calling surface. One-shot helpers close their client
+before returning owned bytes. `with requ.Session() as session:` reuses an
+explicitly owned client, headers, Basic auth and a standard-library cookie jar.
+Session calls are serialized; native Client remains the concurrent pooled API.
+
+Select repeated `params`, `data` fields or bytes/text, finite `json`, and `files`
+as mappings or ordered pairs. File values accept a binary/text stream or
+`(filename, content[, content_type[, headers]])`; filename None selects an ordinary
+field. Caller files remain open. Multipart encoding counts its complete framing
+against max_request_bytes, limits fields/parts to 1,024 and part headers to 8 KiB,
+and bounds file reads. JSON accepts ordinary JSON encoder inputs including tuple
+arrays, while rejecting non-finite numbers; native encode_json remains strict.
+JSON and form/file input are mutually exclusive. `json=None` selects no JSON body
+on this frontend, matching the Requests default; native Client can send JSON null.
+
+Frontend responses expose status_code/status, content/body, text, mutable
+case-insensitive headers, raw_headers, json(), ok/truthiness and raise_for_status().
+They own bytes and close() is a no-op. `requ.requests.Response()` is available for
+application fixtures. The published native `requ.Response` stays immutable with
+ordered header pairs, adding status_code/content aliases. The native API's
+HTTPStatusError/TransportError hierarchy is unchanged.
+
+Frontend HTTPError, ConnectionError, Timeout, TooManyRedirects and JSON errors
+derive from RequestException (`requ.exceptions` exports the complete frontend
+hierarchy). HTTPError retains the frontend response, including error status and
+headers; its false truth value must not be mistaken for response=None. Invalid
+URLs/headers fail before I/O and errors omit submitted values.
+
+Finite timeout defaults to 10 seconds. A positive scalar selects connect and
+socket I/O bounds; `(connect, read)` selects them separately. Native Client adds
+optional connect_timeout; timeout continues to bound socket reads/writes. DNS
+resolution and total wall-clock deadlines are separate. TLS verification remains
+mandatory, trust_env remains an explicit opt-in, GET/HEAD redirects retain the
+native origin/downgrade/limit policy, and mutations return redirects without
+replay. `allow_redirects=False` returns the first response. Cookie persistence
+uses final responses; intermediate redirect-cookie processing is not inferred.
+
+This is a bounded Requests-style profile rather than complete import-compatible
+Requests emulation. Streaming bodies/responses, arbitrary auth handlers, prepared
+requests, adapter mounts, hooks, TLS bypass and per-request proxy dictionaries are
+unsupported and fail explicitly. Use native Client/AsyncClient for the original
+transport contract; asynchronous facade behavior is unchanged.

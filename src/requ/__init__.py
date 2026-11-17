@@ -20,7 +20,7 @@ __all__ = [
     'TransportError', 'TransportTimeoutError', 'ClientClosedError', 'PoolTimeoutError',
 ]
 
-__version__ = '0.1.0'
+__version__ = '0.2.0'
 
 type JSONValue = None | bool | int | float | str | list[JSONValue] | dict[str, JSONValue]
 
@@ -160,6 +160,14 @@ class Response:
     headers: tuple[tuple[str, str], ...]
     body: bytes = field(repr=False)
 
+    @property
+    def status_code(self) -> int:
+        return self.status
+
+    @property
+    def content(self) -> bytes:
+        return self.body
+
     def headers_all(self, name: str) -> tuple[str, ...]:
         return tuple(value for key, value in self.headers if key.lower() == name.lower())
 
@@ -205,9 +213,12 @@ class Client:
     pool_timeout: float = 10.0
     keepalive_expiry: float = 30.0
     _pool: Pool = field(init=False, repr=False, compare=False)
+    connect_timeout: float | None = None
     _context: ssl.SSLContext = field(init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
+        if self.connect_timeout is not None and (type(self.connect_timeout) not in (int, float) or not math.isfinite(self.connect_timeout) or self.connect_timeout <= 0):
+            raise ValueError('connect_timeout must be finite positive seconds or None')
         for name in ('timeout', 'pool_timeout', 'keepalive_expiry'):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -257,8 +268,10 @@ class Client:
 
     def request(self, method: str, url: str, *, headers: Mapping[str, str] | None = None,
                 body: bytes | None = None, json=_MISSING,
-                params: Mapping | Sequence[tuple] | None = None) -> Response:
+                params: Mapping | Sequence[tuple] | None = None, follow_redirects: bool = True) -> Response:
         self._pool.check_open()
+        if type(follow_redirects) is not bool:
+            raise TypeError('follow_redirects must be a bool')
         if not isinstance(method, str) or not _TOKEN.fullmatch(method):
             raise ValueError('method must be an HTTP token')
         method = method.upper()
@@ -285,7 +298,7 @@ class Client:
         for redirects in range(self.max_redirects + 1):
             response = self._send(method, current, supplied, body)
             location = response.header('location')
-            if method not in {'GET', 'HEAD'} or response.status not in _REDIRECTS or location is None:
+            if not follow_redirects or method not in {'GET', 'HEAD'} or response.status not in _REDIRECTS or location is None:
                 return response
             if redirects >= self.max_redirects:
                 raise RedirectError('max_redirects exceeded')
@@ -308,7 +321,7 @@ class Client:
         raise AssertionError('unreachable')
 
     def _send(self, method: str, url: str, supplied: dict, body: bytes | None) -> Response:
-        headers = {'user-agent': 'requ/0.1.0', **supplied, 'accept-encoding': 'identity'}
+        headers = {'user-agent': 'requ/' + __version__, **supplied, 'accept-encoding': 'identity'}
         connection = None
         raw = None
         reusable = False
@@ -321,19 +334,37 @@ class Client:
                 opener = build_opener(_NoRedirect(), ProxyHandler(), HTTPSHandler(context=self._context))
                 request = Request(url, data=body, headers=headers, method=method)
                 try:
-                    raw = opener.open(request, timeout=self.timeout)
+                    raw = opener.open(request, timeout=self.connect_timeout or self.timeout)
                 except _HTTPError as error:
                     raw = error
             else:
                 kind = HTTPSConnection if key[0] == 'https' else HTTPConnection
-                options = {'timeout': self.timeout}
+                options = {'timeout': self.connect_timeout or self.timeout}
                 if key[0] == 'https':
                     options['context'] = self._context
                 connection = self._pool.acquire(key, lambda: kind(key[1], key[2], **options))
                 parts = urlsplit(url)
                 target = urlunsplit(('', '', parts.path, parts.query, ''))
+                if connection.sock is None:
+                    connection.connect()
+                if connection.sock is not None:
+                    connection.sock.settimeout(self.timeout)
                 connection.request(method, target, body=body, headers=headers)
                 raw = connection.getresponse()
+            if self.trust_env and self.connect_timeout is not None and self.connect_timeout != self.timeout:
+                candidate = raw
+                for _ in range(5):
+                    sock = getattr(candidate, '_sock', None)
+                    if sock is not None:
+                        sock.settimeout(self.timeout)
+                        break
+                    candidate = getattr(candidate, 'fp', None) or getattr(candidate, 'raw', None)
+                    if candidate is None:
+                        break
+                else:
+                    sock = None
+                if sock is None:
+                    raise TransportError('Proxy response socket does not expose read-timeout control')
             response = self._read(raw, method, url)
             reusable = not self.trust_env and not getattr(raw, 'will_close', True)
             return response
@@ -432,3 +463,11 @@ class AsyncClient:
 
     async def __aexit__(self, *exc) -> None:
         await self.aclose()
+
+
+from . import exceptions
+from .exceptions import RequestException, HTTPError, ConnectionError, Timeout, TooManyRedirects
+from .requests import Session, request, get, head, options, post, put, patch, delete
+
+__all__ += ["Session", "request", "get", "head", "options", "post", "put", "patch", "delete",
+            "exceptions", "RequestException", "HTTPError", "ConnectionError", "Timeout", "TooManyRedirects"]

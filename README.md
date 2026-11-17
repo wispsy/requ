@@ -43,3 +43,29 @@ Build and independently test both distributions with
 `uv run python scripts/check_distribution.py`.
 
 MIT.
+
+## Requests-style calls
+
+The 0.2.0 candidate adds a bounded frontend for ordinary Requests-style usage:
+
+```python
+import requ
+
+response = requ.post('https://api.example.com/users', json={'name': 'Ash'}, timeout=(5, 30))
+response.raise_for_status()
+assert response.status_code == 200
+user = response.json()
+
+with requ.Session(max_request_bytes=8_500_000) as session:
+    session.headers['Authorization'] = 'Bearer caller-supplied-token'
+    with open('image.png', 'rb') as source:
+        response = session.put('https://api.example.com/image',
+                               files={'file': ('image.png', source, 'image/png')})
+```
+
+The frontend supports forms, bounded multipart, case-insensitive response headers,
+owned content, request exceptions and explicit session cookies. Native Client and
+AsyncClient retain their original API and safety policies. See the
+[supported frontend contract](docs/api.md#requests-style-frontend-020-candidate)
+for differences from Requests and unsupported options. Version preparation does
+not create a release tag or upload a package.
