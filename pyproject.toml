@@ -1,6 +1,6 @@
 [project]
 name = "requ"
-version = "0.1.0"
+version = "0.2.0"
 description = "Bounded HTTP(S) requests with client-owned connection pooling"
 readme = "README.md"
 license = "MIT"

@@ -19,8 +19,8 @@ import tomllib
 import venv
 import zipfile
 
-PACKAGE_FILES = {'requ/__init__.py', 'requ/_pool.py', 'requ/py.typed'}
-TEST_FILES = {'test_requ.py', 'test_transport.py', 'test_async.py'}
+PACKAGE_FILES = {'requ/__init__.py', 'requ/_pool.py', 'requ/requests.py', 'requ/exceptions.py', 'requ/py.typed'}
+TEST_FILES = {'test_requ.py', 'test_transport.py', 'test_async.py', 'test_requests.py'}
 TEST_DATA_FILES = set()
 EXAMPLE_FILES = {'local_http.py'}
 DIAGNOSTIC_FILES = set()
