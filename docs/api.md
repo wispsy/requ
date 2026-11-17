@@ -96,7 +96,7 @@ HEAD/204/304 ignore representation length when checking body limits.
 Transport failure or await cancellation can occur after a mutation reached the
 server. Applications must reconcile state before any explicit retry.
 
-## Requests-style frontend (0.2.0 candidate)
+## Requests-style frontend (0.2.0)
 
 `requ.get/post/put/patch/delete/head/options` and `requ.request(method, url, ...)`
 provide the common Requests calling surface. One-shot helpers close their client

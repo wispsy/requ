@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.2.0 (unreleased)
+## 0.2.0 (2026-11-16)
 
 - Add bounded Requests-style helpers and sessions, forms/multipart, response facades
   and request errors while preserving the native client/response contracts.
