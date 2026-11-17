@@ -46,7 +46,7 @@ MIT.
 
 ## Requests-style calls
 
-The 0.2.0 candidate adds a bounded frontend for ordinary Requests-style usage:
+Version 0.2.0 adds a bounded frontend for ordinary Requests-style usage:
 
 ```python
 import requ
@@ -66,6 +66,5 @@ with requ.Session(max_request_bytes=8_500_000) as session:
 The frontend supports forms, bounded multipart, case-insensitive response headers,
 owned content, request exceptions and explicit session cookies. Native Client and
 AsyncClient retain their original API and safety policies. See the
-[supported frontend contract](docs/api.md#requests-style-frontend-020-candidate)
-for differences from Requests and unsupported options. Version preparation does
-not create a release tag or upload a package.
+[supported frontend contract](docs/api.md#requests-style-frontend-020)
+for differences from Requests and unsupported options.
